@@ -26,8 +26,8 @@ from glances.logger import logger
 from glances.exports.glances_export import GlancesExport
 
 import couchdb
-import couchdb.mapping
-
+from cloudant.client import Cloudant
+from cloudant.client import CouchDB
 
 class Export(GlancesExport):
 
@@ -44,10 +44,10 @@ class Export(GlancesExport):
         self.user = None
         self.password = None
 
-        # Load the Cassandra configuration file section
+        # Load the Couchdb configuration file section
         self.export_enable = self.load_conf('couchdb',
                                             mandatories=['host', 'port', 'db'],
-                                            options=['user', 'password'])
+                                            options=['user', 'password', 'cloudant'])
         if not self.export_enable:
             sys.exit(2)
 
@@ -59,17 +59,18 @@ class Export(GlancesExport):
         if not self.export_enable:
             return None
 
-        if self.user is None:
-            server_uri = 'http://{}:{}/'.format(self.host,
+        if self.type is not None and self.type:
+            server_uri = 'https://{}:{}/'.format(self.host,
                                                 self.port)
         else:
-            server_uri = 'http://{}:{}@{}:{}/'.format(self.user,
-                                                      self.password,
-                                                      self.host,
-                                                      self.port)
+            server_uri = 'http://{}:{}/'.format(self.host,
+                                                self.port)
 
         try:
-            s = couchdb.Server(server_uri)
+            if self.type is not None and self.type:
+                client = Cloudant(self.user, self.password, url=server_uri, connect=True)
+            else:
+                client = CouchDB(self.user, self.password, url=server_uri, connect=True)
         except Exception as e:
             logger.critical("Cannot connect to CouchDB server %s (%s)" % (server_uri, e))
             sys.exit(2)
@@ -77,15 +78,15 @@ class Export(GlancesExport):
             logger.info("Connected to the CouchDB server %s" % server_uri)
 
         try:
-            s[self.db]
+            client[self.db]
         except Exception as e:
             # Database did not exist
             # Create it...
-            s.create(self.db)
+            client.create_database(self.db)
         else:
             logger.info("There is already a %s database" % self.db)
 
-        return s
+        return client
 
     def database(self):
         """Return the CouchDB database object"""
@@ -105,6 +106,6 @@ class Export(GlancesExport):
         # Write input to the CouchDB database
         # Result can be view: http://127.0.0.1:5984/_utils
         try:
-            self.client[self.db].save(data)
+            self.client[self.db].create_document(data)
         except Exception as e:
             logger.error("Cannot export {} stats to CouchDB ({})".format(name, e))
