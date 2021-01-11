@@ -28,6 +28,21 @@ from glances.exports.glances_export import GlancesExport
 import couchdb
 from cloudant.client import Cloudant
 from cloudant.client import CouchDB
+from cloudant.document import Document
+
+import time
+
+import json
+
+dt_format = '%Y-%m-%dT%H:%M:%S'
+
+class DTEncoder(json.JSONEncoder):
+
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.strftime(dt_format)
+        return super(DTEncoder, self).default(obj)
+
 
 class Export(GlancesExport):
 
@@ -47,30 +62,32 @@ class Export(GlancesExport):
         # Load the Couchdb configuration file section
         self.export_enable = self.load_conf('couchdb',
                                             mandatories=['host', 'port', 'db'],
-                                            options=['user', 'password', 'cloudant'])
+                                            options=['user', 'password', 'cloudant', 'time'])
         if not self.export_enable:
             sys.exit(2)
 
         # Init the CouchDB client
         self.client = self.init()
+        self.db = self.database()
 
     def init(self):
         """Init the connection to the CouchDB server."""
         if not self.export_enable:
             return None
 
-        if self.type is not None and self.type:
-            server_uri = 'https://{}:{}/'.format(self.host,
-                                                self.port)
+        if self.cloudant:
+            server_uri = 'https://{}'.format(self.host)
         else:
-            server_uri = 'http://{}:{}/'.format(self.host,
+            server_uri = 'http://{}:{}'.format(self.host,
                                                 self.port)
 
         try:
-            if self.type is not None and self.type:
+            if self.cloudant:
                 client = Cloudant(self.user, self.password, url=server_uri, connect=True)
+                session = client.session()
             else:
                 client = CouchDB(self.user, self.password, url=server_uri, connect=True)
+                session = client.session()
         except Exception as e:
             logger.critical("Cannot connect to CouchDB server %s (%s)" % (server_uri, e))
             sys.exit(2)
@@ -101,11 +118,16 @@ class Export(GlancesExport):
 
         # Set the type to the current stat name
         data['type'] = name
-        data['time'] = couchdb.mapping.DateTimeField()._to_json(datetime.now())
 
         # Write input to the CouchDB database
         # Result can be view: http://127.0.0.1:5984/_utils
         try:
-            self.client[self.db].create_document(data)
+            doc = Document(self.db, encoder=DTEncoder)
+            doc.update(data)
+            if self.time is not None and self.time == "utc":
+                doc['time'] = round(time.time())
+            else:
+                doc['time'] = datetime.now()
+            doc.save()
         except Exception as e:
             logger.error("Cannot export {} stats to CouchDB ({})".format(name, e))
